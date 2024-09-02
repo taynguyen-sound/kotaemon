@@ -1,0 +1,84 @@
+name: 📦 Release kotaemon to DockerHub
+
+on:
+  push:
+    tags:
+      - "*"
+    branches:
+      - main
+
+env:
+  DOCKERHUB_IMAGE_NAME: "${{ secrets.DOCKERHUB_USERNAME }}/kotaemon"
+  PLATFORMS: linux/amd64
+
+jobs:
+  check-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_matches: ${{ steps.check-tag.outputs.tag_matches }}
+    steps:
+      - name: Check Tag
+        id: check-tag
+        run: |
+          if [[ "${{ github.ref }}" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "tag_matches=true" >> $GITHUB_OUTPUT
+          else
+              echo "tag_matches=false" >> $GITHUB_OUTPUT
+          fi
+
+  get-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.8'
+      - name: Install setuptools_scm
+        run: python -m pip install setuptools_scm
+      - name: Get Release Version
+        id: version
+        run: echo "version=$(python -m setuptools_scm)" >> $GITHUB_OUTPUT
+
+  release-docker:
+    name: Publish to DockerHub
+    runs-on: ubuntu-latest
+    needs:
+      - check-tag
+      - get-version
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Set up Docker
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push prerelease Docker image
+        if: ${{ needs.check-tag.outputs.tag_matches == 'false' }}
+        uses: docker/build-push-action@v3.2.0
+        with:
+          context: .
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: "${{ env.DOCKERHUB_IMAGE_NAME }}:${{ needs.get-version.outputs.version }}"
+      - name: Build and push release Docker image
+        if: ${{ needs.check-tag.outputs.tag_matches == 'true' }}
+        uses: docker/build-push-action@v3.2.0
+        with:
+          file: Dockerfile
+          context: .
+          platforms: ${{ env.PLATFORMS }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          load: true
+          push: true
+          tags: "${{ env.DOCKERHUB_IMAGE_NAME }}:${{ needs.get-version.outputs.version }},${{ env.DOCKERHUB_IMAGE_NAME }}:latest"
+
